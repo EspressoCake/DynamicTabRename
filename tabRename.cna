@@ -1,0 +1,633 @@
+# org.json from https://mvnrepository.com/artifact/org.json/json
+# Documentation - https://stleary.github.io/JSON-java/
+# Source code - https://github.com/stleary/JSON-java and git submodule ../third_party/JSON-java
+#
+# Thanks to @vysec's ANGRYPUPPY for the library suggestion
+#
+# Configuration variables:
+#  - $json_path: Directory containing json.cna (default: script_resource())
+#  - $json_jar_file: File json.jar (default: $json_path . '/jars/json.jar')
+#
+
+# Load java stuff
+import java.net.*;
+
+# Keeping these global so we don't have to re-create them over and over again.
+$json_loader = $null;
+$class_JSONObject = $null;
+$class_JSONArray = $null;
+$class_Map = $null;
+$class_String = $null;
+
+# Cobaltstrike's jar loading is broken in jre9+ thanks to some
+# implementation changes by Oracle.
+#
+# This makes a new loader which is capable of loading the json library
+sub _json_new_loader {
+	local('$json_loader $json_url');
+
+	# Set default $json_path if needed. This is a directory where we may find
+	# jars/json.jar.
+	if (!$json_path) {
+		$json_path = script_resource();
+	}
+
+	# Set $json_jar_file if needed
+	if (!$json_jar_file) {
+		$json_jar_file = $json_path . '/JARs/json-java.jar';
+	}
+
+	if (!-exists $json_jar_file) {
+		println('[json.cna] Could not find ' . $json_jar_file . '. Check $json_path');
+		exit();
+	}
+
+	$json_url = [new URL: 'file://' . $json_jar_file];
+	$json_loader = [new URLClassLoader: @($json_url)];
+	return $json_loader;
+}
+
+# Make a new class by name using the json loader. Caller must initialize
+# $json_loader.
+sub _json_new_class {
+	local('$name');
+
+	$name = $1;
+
+	return [Class forName: $name, false, $json_loader];
+}
+
+# Initialize $json_loader and the $class_* variables if needed.
+sub _json_init_loader {
+	if (!$json_loader) {
+		$json_loader = _json_new_loader();
+	}
+	if (!$class_JSONObject) {
+		$class_JSONObject = _json_new_class('org.json.JSONObject');
+	}
+	if (!$class_JSONArray) {
+		$class_JSONArray = _json_new_class('org.json.JSONArray');
+	}
+	if (!$class_Map) {
+		$class_Map = _json_new_class('java.util.Map');
+	}
+	if (!$class_String) {
+		$class_String = _json_new_class('java.lang.String');
+	}
+}
+#
+# Explicit toString
+sub json_tostring {
+	local('$obj');
+
+	$obj = $1;
+
+	return [$obj toString];
+}
+
+# Make a new JSONObject object
+sub json_new_jsonobject {
+	local('$arg $ctor $casted');
+
+	$arg = $1;
+
+	_json_init_loader();
+	if ($arg) {
+		if ($arg isa ^String) {
+			# string constructor
+			$ctor = [$class_JSONObject getDeclaredConstructor: @($class_String)];
+			return [$ctor newInstance: @($arg)];
+		} else if ($arg isa typeOf(%())) {
+			# hash/map constructor
+			$ctor = [$class_JSONObject getDeclaredConstructor: @($class_Map)];
+			$casted = casti($arg, $class_Map);
+			return [$ctor newInstance: @($casted)];
+		} else {
+			println("[json.cna] Unknown arg type: " . typeOf($arg));
+			println("[json.cna] For message: " . $arg);
+			return $null;
+		}
+	} else {
+		# single constructor
+		return [$class_JSONObject newInstance];
+	}
+}
+
+# Make a new JSONArray object
+sub json_new_jsonarray {
+	local('$arg $ctor');
+
+	$arg = $1;
+
+	_json_init_loader();
+	if ($arg) {
+		$ctor = [$class_JSONArray getDeclaredConstructor: @($class_String)];
+		return [$ctor newInstance: @($arg)];
+	} else {
+		return [$class_JSONArray newInstance];
+	}
+}
+
+# Convert JSONObjects and JSONArrays to native types
+sub json_native {
+	local('$obj $class_name %ret @ret $i $key');
+
+	$obj = $1;
+
+	$class_name = [[$obj getClass] getName];
+	if ($class_name eq 'org.json.JSONObject') {
+		%ret = %();
+		foreach $key (json_keys($obj)) {
+			%ret[$key] = json_native(json_value($obj, $key));
+		}
+		return %ret;
+	} else if ($class_name eq 'org.json.JSONArray') {
+		@ret = @();
+		for ($i = 0; $i < json_length($obj); $i++) {
+			push(@ret, json_native(json_value($obj, $i)));
+		}
+		return @ret;
+	} else {
+		return $obj;
+	}
+}
+
+# Convert json to object
+sub json_loads {
+	local('$json $obj');
+
+	$json = $1;
+
+	$obj = json_new_jsonobject($json);
+	if ($obj) {
+		return json_native($obj);
+	} else {
+		return $null;
+	}
+}
+
+# Convert object to json
+sub json_dumps {
+	local('$item $obj');
+
+	$item = $1;
+
+	$obj = json_new_jsonobject($item);
+	if ($obj) {
+		return json_tostring($obj);
+	} else {
+		return $null;
+	}
+}
+
+# Get keys from JSONObject
+sub json_keys {
+	local('$obj');
+
+	$obj = $1;
+
+	return [[$obj keySet] toArray];
+}
+
+# Get value from JSONObject or JSONArray
+sub json_value {
+	local('$obj $key');
+
+	$obj = $1;
+	$key = $2;
+
+	return [$obj get: $key];
+}
+
+# Return list of keys
+sub json_keys {
+	local('$obj $key');
+
+	$obj = $1;
+
+	return [$obj keySet];
+}
+
+# Get optional value from JSONObject (returns $null instead of throwing
+# exception if item doesn't exit)
+sub json_optional_value {
+	local('$obj $key');
+
+	$obj = $1;
+	$key = $2;
+
+	return [$obj opt: $key];
+}
+
+# Get length of JSONArray
+sub json_length {
+	local('$arr');
+
+	$arr = $1;
+
+	return [$arr length];
+}
+
+# Init for including thread
+_json_init_loader();
+
+
+
+
+
+#################################
+#                               #
+#   Heavy credits to mgeeky     #
+#                               #
+#################################
+
+$beacon_tab_name_format = "Beacon: <user>@<computer> (<pid>)";
+$persistMostRecent = 1;
+
+
+sub initialRunForData {
+    local('$beacon $dstab');
+    global('%beaconMetadata');
+    
+    foreach $beacon (beacons())
+    {
+        if ($beacon['id'] !in keys(%beaconMetadata))
+        {
+            %beaconMetadata[$beacon['id']] = %( initialkey => "Beacon " . $beacon['host'] . "@" . $beacon['pid'], knownvalues => @(), knownhistory => %(), preferredindex => 0 );
+            $dstab = $beacon_tab_name_format;
+
+            foreach $k => $v ($beacon)
+            {
+               $dstab = replace($dstab, '<' . $k . '>', $v); 
+            }
+            
+            %beaconMetadata[$beacon['id']]['knownvalues'] = add(%beaconMetadata[$beacon['id']]['knownvalues'], $dstab);
+        }
+    }
+}
+
+
+sub setHistoryItem {
+    %beaconMetadata[$1]['knownhistory'][dstamp(ticks())] = $2;
+}
+
+
+sub retrieveHistory {
+    local('$key $value');
+
+    foreach $key => $value (%beaconMetadata[$1]['knownhistory'])
+    {
+        blog($1, "Item: " . $value . "\t" . $key);
+    }
+}
+
+
+sub searchForHistoryItems {
+    local('$bMetadataKey $key $value $item');
+
+    foreach $bMetadataKey (keys(%beaconMetadata))
+    {
+        foreach $item (keys(%beaconMetadata[$bMetadataKey]['knownhistory']))
+        {
+            if ( (lc(%beaconMetadata[$bMetadataKey]['knownhistory'][$item]) hasmatch lc($2)) )
+            {
+                blog($1, "Found match: " . binfo($bMetadataKey, 'internal') . "@" . binfo($bMetadataKey, 'pid') . "\t" . %beaconMetadata[$bMetadataKey]['knownhistory'][$item] . "\t" . "SET AT: " . $item);
+            }
+        }
+    }
+}
+
+
+sub setTagFromHistory {
+    local('$client $srctabname $i $dsttabname $apptabs $applicationTab $arg $index');
+
+    if ($beacon_tab_name_format is $null || strlen($beacon_tab_name_format) == 0) 
+    {
+        return;
+    }
+
+    $bid = $1;
+    $index = int($2) - 1;
+    $client = getAggressorClient();
+    $apptabs = [[$client tabs] apptabs];
+
+    $srctabname = "Beacon " . beacon_info($bid, 'host') . "@" . beacon_info($bid, 'pid');
+    $srctabname = [$srctabname trim];
+    
+    for ( $i = 0; $i < [$apptabs size] ; $i++ ) 
+    {
+        $applicationTab = [$apptabs get: $i];
+
+        if ([$applicationTab A] eq $bid) {
+            $currtabname = [[[$applicationTab B] getText] trim];
+
+            if (($currtabname eq %beaconMetadata[$1]['initialkey']) || ($currtabname in %beaconMetadata[$1]['knownvalues']) )
+            {
+                $dsttabname = %beaconMetadata[$1]['knownvalues'][$index];
+
+                # Experimental
+                %beaconMetadata[$1]['preferredindex'] = $index;
+
+                [[$applicationTab B] setText: $dsttabname . ""];
+            }
+        }
+    }
+}
+
+
+sub retagNewTab {
+    local('$client $srctabname $i $dsttabname $apptabs $applicationTab $arg');
+
+    if ($beacon_tab_name_format is $null || strlen($beacon_tab_name_format) == 0) 
+    {
+        return;
+    }
+
+    if (size(@_) == 2)
+    {
+        $bid = $1;
+        $nullify = int($2);
+    }
+    else
+    {
+        $bid = $1;
+        $nullify = 0;
+    }
+
+    $client = getAggressorClient();
+    $apptabs = [[$client tabs] apptabs];
+
+    #Experimental
+    if ($nullify > 0)
+    {
+        if ($nullify <= (size(%beaconMetadata[$1]['knownvalues'])))
+        {
+            %beaconMetadata[$1]['preferredindex'] = $nullify - 1;
+        }
+    }
+
+    $srctabname = "Beacon " . beacon_info($bid, 'host') . "@" . beacon_info($bid, 'pid');
+    $srctabname = [$srctabname trim];
+    
+    for ( $i = 0; $i < [$apptabs size] ; $i++ ) 
+    {
+        $applicationTab = [$apptabs get: $i];
+
+        if ([$applicationTab A] eq $bid) {
+            $currtabname = [[[$applicationTab B] getText] trim];
+
+            if (($currtabname eq %beaconMetadata[$1]['initialkey']) || ($currtabname in %beaconMetadata[$1]['knownvalues']) )
+            {
+                # Experimental
+                if (%beaconMetadata[$1]['preferredindex'] != 0)
+                {
+                    $dsttabname = %beaconMetadata[$1]['knownvalues'][%beaconMetadata[$1]['preferredindex']];
+                }
+                else
+                {
+                    $dsttabname = %beaconMetadata[$1]['knownvalues'][0];
+                }
+                
+
+                [[$applicationTab B] setText: $dsttabname . ""];
+            }
+        }
+    }
+}
+
+
+sub dumpem {
+    local('$handle');
+    local('$key');
+    local('$value');
+
+    if (size(@_) != 2)
+    {
+        berror($1, "You must supply a filename!");
+        return;
+    }
+
+    $handle = openf('> ' . script_resource("/") . $2);
+
+    foreach $key (keys(%beaconMetadata))
+    {
+        if (size(%beaconMetadata[$key]['knownvalues']) > 0)
+        {
+            println($handle, "Beacon ID: " . $key);
+            println($handle, "Known History:");
+            println($handle, "\t" . join("\n\t", %beaconMetadata[$key]['knownvalues']));
+            println($handle, "");
+        }     
+    }
+
+    closef($handle);
+    show_message("Saved known history: " . script_resource("/") . $2);
+}
+
+
+sub renameBeaconTab {
+    local('$client $srctabname $i $dsttabname $apptabs $applicationTab $arg');
+
+    if($beacon_tab_name_format is $null || strlen($beacon_tab_name_format) == 0) {
+        return;
+    }
+
+    $bid = $1;
+    $arg = $2;
+    $client = getAggressorClient();
+    $apptabs = [[$client tabs] apptabs];
+
+    $srctabname = "Beacon " . beacon_info($bid, 'host') . "@" . beacon_info($bid, 'pid');
+    $srctabname = [$srctabname trim];
+    
+    for ( $i = 0; $i < [$apptabs size] ; $i++) {
+        $applicationTab = [$apptabs get: $i];
+
+        if ([$applicationTab A] eq $bid) {
+            $currtabname = [[[$applicationTab B] getText] trim];
+
+            if (($currtabname eq %beaconMetadata[$1]['initialkey']) || ($currtabname in %beaconMetadata[$1]['knownvalues']) )
+            {
+                $dsttabname = $beacon_tab_name_format;
+                $dsttabname = replace($dsttabname, 'Beacon', $2, 1);
+
+                foreach $beacon (beacons()) {
+                    if ($beacon['id'] eq $bid) {
+                        foreach $k => $v ($beacon) {
+                            $dsttabname = replace($dsttabname, '<' . $k . '>', $v);
+                        }
+                    }
+                }
+
+                if ($dsttabname !in %beaconMetadata[$1]['knownvalues'])
+                {
+                    %beaconMetadata[$1]['knownvalues'] = add(%beaconMetadata[$1]['knownvalues'], $dsttabname);
+                }
+
+                if (%beaconMetadata[$1]['preferredindex'] == 0)
+                {
+                    [[$applicationTab B] setText: $dsttabname . ""];
+                }
+                else
+                {
+                    [[$applicationTab B] setText: %beaconMetadata[$1]['knownvalues'][%beaconMetadata[$1]['preferredindex']]]
+                }
+            } 
+        }
+    }
+}
+
+
+alias cbm {
+    renameBeaconTab($1, $2);
+}
+
+
+alias cbm_hist {
+    local('$currentIndex');
+
+    $currentIndex = 1;
+
+    foreach $item (%beaconMetadata[$1]['knownvalues'])
+    {
+        blog($1, $currentIndex . "\t" . $item);
+        $currentIndex = $currentIndex + 1;
+    }
+}
+
+
+alias rtn {
+    retagNewTab($1, $2);
+}
+
+
+beacon_command_register(
+	"rtn", 
+	"Change preferred index from current history of Beacon tab metadata.", 
+	"Synopsis: rtn INDEX_NUMBER\n\n");
+
+
+beacon_command_register(
+	"cbm", 
+	"change beacon tab metadata.", 
+	"Synopsis: cbm ['action being done']\n\n");
+
+
+beacon_command_register(
+	"cbm_hist", 
+	"Shown known tags with Beacon metadata.", 
+	"Synopsis: cbm_hist\n\n");
+
+
+on heartbeat_5s {
+    local('$beacon');
+
+    foreach $beacon (beacons())
+    {
+        retagNewTab($beacon['id']);
+    }
+}
+
+
+initialRunForData();
+
+
+
+####### COMMAND BREAK
+sub import_json_tabs {
+	local('$cFilePath $handle $cString $fileString');
+
+	if (size(@_) != 2)
+	{
+		blog($2, "I need a path to a JSON file.");
+		return;
+	}
+
+	if (!-isFile ($1))
+	{
+		blog($2, "This file is invalid.");
+		return;
+	}
+
+	$handle = openf($1);
+
+	while $cString (readln($handle))
+	{
+		$fileString .= $cString;
+	}
+
+	closef($handle);
+
+	local('$keys $obj');
+	$obj =  json_new_jsonobject($fileString);
+	$keys = [$obj keys];
+
+	while ([$keys hasNext])
+	{
+		local('$known_values_length');%beaconMetadata
+		$data = [$keys next];
+
+		$cobj = json_new_jsonobject(json_tostring([$obj get: $data]));
+		$known_values_length = [[$cobj get: "knownvalues"] length];
+		$preferred_index = [Integer parseInt: ([$cobj get: "preferredindex"])];
+
+		@arder = @();
+		for ($index = $known_values_length; $index >= 0; $index--)
+		{
+			if ([[$cobj get: "knownvalues"] get: $index] !is $null)
+			{
+				add(@arder, [[$cobj get: "knownvalues"] get: $index]);
+			}
+		}
+
+		%beaconMetadata[$data]['knownvalues'] = @arder;
+		%beaconMetadata[$data]['preferredindex'] = $preferred_index;
+	}
+
+	blog($2, "Imported tab preferences file: " . $1);
+}
+
+
+command import_json_tabs {
+	if (size(@) != 1)
+	{
+		println("You must supply a file path to import from.");
+		return;
+	}
+
+	import_json_tabs($1)
+}
+
+alias import_json_tabs {
+	if (size(@_) != 2)
+	{
+		berror($1, "You must supply a file path to import from.");
+		return;
+	}
+	else
+	{
+		import_json_tabs($2, $1);
+	}
+}
+
+
+sub dump_json_tabs {
+	local('$handle');
+
+	$handle = openf("> " . script_resource("") . "/" . "recovery.json");
+	$obj = json_new_jsonobject(%beaconMetadata);
+	println($handle, json_tostring($obj));
+	closef($handle);
+
+	show_message("Recovered history file: " . script_resource("/") . "recovery.json");
+}
+
+alias dump_json_tabs {
+	dump_json_tabs();
+}
+
+command dump_json_tabs {
+	dump_json_tabs();
+}
+
+beacon_command_register("dump_json_tabs", "Dump JSON data", "dump_json_tabs");
